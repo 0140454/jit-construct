@@ -22,7 +22,15 @@
 #define Dst &state
 #define MAX_NESTING 256
 
+typedef struct _LOOP_OPT_INFO {
+    int total_offset;
+    int count;
+    int offset[256];
+    int mul_value[256];
+} loop_opt_info_t;
+
 int continuous_count(char *p);
+int check_loop(char *p, loop_opt_info_t *info);
 
 int main(int argc, char *argv[])
 {
@@ -34,6 +42,7 @@ int main(int argc, char *argv[])
     int pcstack[MAX_NESTING];
     int *top = pcstack, *limit = pcstack + MAX_NESTING;
 
+    loop_opt_info_t loop_opt;
     int count = 0;
 
     // Function prologue.
@@ -72,6 +81,23 @@ int main(int argc, char *argv[])
                 break;
             case '[':
                 if (top == limit) err("Nesting too deep.");
+                if (check_loop(p, &loop_opt)) {
+                    if (loop_opt.count == 0) {
+                        |  mov byte [PTR], 0
+                    } else {
+                        |  mov r12w, word [PTR]
+                        for (int i = 0; i < loop_opt.count; ++i) {
+                            |  mov r13w, loop_opt.mul_value[i]
+                            |  imul r13w, r12w
+                            |  add PTR, loop_opt.offset[i]
+                            |  add byte [PTR], r13b
+                            |  sub PTR, loop_opt.offset[i]
+                        }
+                        |  mov byte [PTR], 0
+                    }
+                    p += loop_opt.total_offset - 1;
+                    break;
+                }
                 // Each loop gets two pclabels: at the beginning and end.
                 // We store pclabel offsets in a stack to link the loop
                 // begin and end together.
@@ -113,4 +139,37 @@ int continuous_count(char *p)
         ++ptr;
     }
     return count;
+}
+
+int check_loop(char *p, loop_opt_info_t *info)
+{
+    int count = 0, offset = 0;
+
+    info->count = 0;
+    info->total_offset = 2;
+    if (*(p + 1) != '-') {
+        return 0;
+    }
+
+    p += 2;
+    while (*p != ']') {
+        if (*p != '+' && *p != '<' && *p != '>') {
+            return 0;
+        }
+
+        count = continuous_count(p);
+        if (*p == '+') {
+            info->offset[info->count] = offset;
+            info->mul_value[info->count++] = count;
+        } else if (*p == '<') {
+            offset -= count;
+        } else if (*p == '>') {
+            offset += count;
+        }
+        info->total_offset += count;
+        p += count;
+    }
+    ++info->total_offset;
+
+    return (offset == 0);
 }
